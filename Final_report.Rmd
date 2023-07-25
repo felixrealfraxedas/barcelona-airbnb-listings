@@ -1,0 +1,1010 @@
+---
+title: 'Airbnb listings in Barcelona: a complete analysis'
+author: "Berta Pla i Casamitjana and Fèlix Real Fraxedas"
+date: "May 2023"
+output:
+  rmdformats::downcute:
+    self_contained: true
+    default_style: "light"
+    downcute_theme: "default"
+    toc_depth: 3
+---
+
+```{=html}
+<style>
+#toc ul.nav li ul li {
+    display: none;
+    max-height: none;
+}
+
+#toc ul.nav li.active ul li  {
+    display: block;
+    max-height: none;
+}
+
+#toc ul.nav li ul li ul li {
+    max-height: none;
+    display: none !important;
+}
+
+#toc ul.nav li ul li.active ul li {
+    max-height: none;
+    display: block !important;
+}
+</style>
+```
+
+```{r knitr_options, include=FALSE}
+## Global options
+knitr::opts_chunk$set(cache = FALSE, warning=FALSE, message = FALSE)
+```
+
+```{r setup, include=FALSE}
+## Global options
+knitr::opts_chunk$set(cache = FALSE, warning=FALSE, message = FALSE)
+```
+
+```{r, include=FALSE}
+library(class)
+library(tidyr)
+library(stringr)
+library(dplyr)
+library(caret)
+library(factoextra)
+```
+
+
+# Introduction
+
+This is the final project of the Quantitative Marketing Techniques course of the Master's Degree in Statistics and Operations Research. The goal of the project is to apply the different methods and techniques we have been seeing during the lectures to a real dataset and try to extract conclusions about it.
+
+
+# Goals and dataset
+
+The dataset that we have chosen consists on the listings that the company Airbnb had in Barcelona at the time of starting of our project (March 2023). The idea is then to have a picture of how the touristic apartments market looks like in our city, by trying, for example, to cluster them in different groups.
+
+Another goal of the project is to see the other side of the equation. That is, try to help the companies or particulars who want to put a listing in Airbnb. For that purpose, we have chosen the price of the listings to be a response variable (both quantitatively and separating it in categorical groups) and we will try to predict it, in order to help potential hosts to determine which is a suitable price for their apartments or rooms.
+
+The first step is to read and prepare our data:
+
+```{r}
+data <- read.csv("listings.csv")
+summary(data)
+```
+
+After a first quick glance to the data, using the previous summary, we see three clear actions to take:
+
+- Convert to factor the text variables that are suitable to it.
+- Eliminate the variables that we are not interested in.
+- Transform the string variables that should be numeric (like $\texttt{price}$, for example).
+
+```{r}
+vars_to_factor <- c("neighbourhood_cleansed", "neighbourhood_group_cleansed", "property_type", "room_type", "has_availability", "calendar_last_scraped", "host_neighbourhood", "host_is_superhost", "host_has_profile_pic", "host_identity_verified", "instant_bookable")
+
+vars_to_eliminate <- c("scrape_id", "last_scraped", "source", "picture_url", "listing_url", "host_url", "host_thumbnail_url", "host_picture_url", "host_verifications", "neighbourhood", "bathrooms", "minimum_minimum_nights", "maximum_minimum_nights", "minimum_maximum_nights", "maximum_maximum_nights", "minimum_nights_avg_ntm", "maximum_nights_avg_ntm", "calendar_updated", "calendar_last_scraped", "number_of_reviews_ltm", "first_review", "last_review", "license", "calculated_host_listings_count", "calculated_host_listings_count_entire_homes", "calculated_host_listings_count_private_rooms", "calculated_host_listings_count_shared_rooms")
+
+data[, vars_to_factor] <- lapply(data[, vars_to_factor], factor)
+data <- data[, !names(data) %in% vars_to_eliminate]
+```
+
+```{r}
+library(stringr)
+data$bathrooms_text <- as.numeric(word(data$bathrooms_text, 1))
+data$price <- as.numeric(gsub('[$,]', '', data$price))
+data$host_response_rate <- as.numeric(gsub('[%,]', '', data$host_response_rate))
+data$host_acceptance_rate <- as.numeric(gsub('[%,]', '', data$host_acceptance_rate))
+```
+
+## Outlier treatment
+
+We will now proceed to treat outliers and values of variables that do not make sense on our analysis. We start by eliminating the listings which do not have availability in 365 days:
+
+```{r}
+data <- data[!(data$availability_365 == 0), ]
+```
+
+Next, we analyze the $\texttt{price}$ variable:
+
+```{r}
+max(data$price, na.rm = TRUE)
+min(data$price, na.rm = TRUE)
+```
+The maximum price does not seem to be real, we decide to get rid of the top $0.5\%$ of listings in terms of price.
+
+```{r}
+# Sets a maximum price for the listings
+max_price <- quantile(data$price, 0.995, na.rm=TRUE)
+
+# Removes data above maximum threshold
+data <- data[data$price < max_price,]
+
+# Plots distribution of price
+hist(data$price)
+```
+Similarly, we will treat the following variables (we have omitted the chunks): $\texttt{minimum_nights}$, $\texttt{host_total_listings_count}$, $\texttt{maximum_nights}$, $\texttt{host_response_rate}$, $\texttt{host_acceptance_rate}$.
+
+```{r, include = FALSE}
+summary(data$minimum_nights)
+hist(data$minimum_nights)
+
+# Sets a maximum minimum_nights for the listings
+max_minnights <- quantile(data$minimum_nights, 0.995, na.rm=TRUE)
+
+# Removes data above maximum threshold
+data <- data[data$minimum_nights < max_minnights,]
+
+# Plots distribution of minimum_nights
+hist(data$minimum_nights)
+```
+
+```{r, include = FALSE}
+summary(data$host_total_listings_count)
+
+hist(data$host_total_listings_count)
+# Sets a maximum host_total_listings_count for the listings
+max_listings <- quantile(data$host_total_listings_count, 0.995, na.rm=TRUE)
+
+# Removes data above maximum threshold
+data <- data[data$host_total_listings_count < max_listings,]
+
+# Plots distribution of host_total_listings_count
+hist(data$host_total_listings_count)
+```
+
+```{r, include = FALSE}
+summary(data$maximum_nights)
+hist(data$maximum_nights)
+
+# Sets a maximum maximum_nights for the listings
+max_maxnights <- quantile(data$maximum_nights, 0.995, na.rm=TRUE)
+
+# Removes data below minimum threshold
+data <- data[data$maximum_nights <= max_maxnights,]
+
+# Plots distribution of maximum_nights
+hist(data$maximum_nights)
+```
+
+```{r, include = FALSE}
+hist(data$host_response_rate)
+
+# Sets a maximum price for the listings
+min_response <- quantile(data$host_response_rate, 0.005, na.rm=TRUE)
+
+# Removes data above maximum threshold
+data <- data[data$host_response_rate > min_response,]
+
+# Plots distribution of price
+hist(data$host_response_rate)
+```
+
+```{r, include = FALSE}
+hist(data$host_acceptance_rate)
+
+# Sets a minimum host_acceptance_rate for the listings
+min_acceptance <- quantile(data$host_acceptance_rate, 0.005, na.rm=TRUE)
+
+# Removes data below minimum threshold
+data <- data[data$host_acceptance_rate > min_acceptance,]
+
+# Plots distribution of price
+hist(data$host_acceptance_rate)
+```
+
+
+## NAs analysis
+
+Now, it is necessary to analyze the NA structure of the data, as in the previous summary we have seen that there is a quite large amount of them in some of the variables. The ideal situation would be to eliminate all the observations containing NAs, to have data that it is easier to treat. In order to determine if that is a good practice, we will analyze the $\texttt{price}$ variable in the rows with and without NAs.
+
+```{r}
+indexs_complete <- complete.cases(data)
+
+t.test(data[indexs_complete, "price"], data[!indexs_complete, "price"], na.rm=TRUE)
+```
+We see that there is no significant difference in $\texttt{price}$ in the rows with NAs, with respect to the rows without NAs, so as we initially wanted, we will stay only with the rows that do not contain any NAs:
+
+```{r}
+data <- data[complete.cases(data), ]
+```
+
+
+## Final remarks
+
+From the initial $15000$ listings, we stay with around $9500$, which is a big drop, but still a good number of observations to work with in our analysis. In fact, in some of the methods that we will be using, we will use just a sample of this data.
+
+Before starting, however, we have to create the variable $\texttt{categorical_price}$, which will classify the variable $\texttt{price}$:
+
+```{r}
+hist(data$price, breaks = 20, freq=FALSE)
+```
+
+As we can see, the variable price follows a distribution that seems to have continuous increments, so we decide to classify it in three levels: High, Medium and Low (with the usual $25/50/25 \%$ division). This variable will be used in the supervised clustering part of the analysis, in our goal to help hosts determine the price of their listings.
+
+```{r}
+breaks <- c(min(data$price) - 1, quantile(data$price, 0.25), quantile(data$price, 0.75), max(data$price) + 1)
+data$categorical_price <- cut(data$price, breaks, labels = c("Low", "Medium", "Superior"))
+print(breaks)
+```
+So, the apartments with prices up to $56€$ will be considered to be in the $\texttt{Low}$ range, between $56€$ and $134€$ in the $\texttt{Medium}$ one and from there in the $\texttt{Superior}$ one.
+
+# PCA, MCA and FAMD
+
+!!! No funcionen i no en podem treure conclusions, però falta afegir aquí el codi i comentaris. Estaran al report final.
+
+!!! No farem servir feature/dimensionality reduction. No interpretable.
+
+# Unsupervised clustering
+
+The main goal of the unsupervised clustering algorithms that we are going to be using during this project will be to try to find clusters in the observations. In this case, we will be attempting to group the different apartment listings to later analyse whether they share some characteristics that make them similar in any way. Next, we are going to prepare the data:
+
+We begin by selecting only the numerical and factor variables from $\texttt{data}$. For the factor variables, we are going to perform one-hot encoding to those with a reasonable number of distinct categories.
+
+```{r}
+data_unsup <- data %>%
+  select_if(~ !is.character(.))
+
+vars_to_eliminate <- c("X", "id", "host_id", "host_neighbourhood", "neighbourhood_cleansed", "property_type",  "categorical_price")
+data_unsup <- data_unsup[, !names(data_unsup) %in% vars_to_eliminate]
+```
+
+```{r}
+library(caret)
+
+# Define one-hot encoding function
+dummy <- dummyVars(" ~ .", data=data_unsup)
+
+# Perform one-hot encoding on data frame
+data_unsup <- data.frame(predict(dummy, newdata=data_unsup))
+
+vars_to_eliminate <- c("host_has_profile_pic.", "host_is_superhost.", "host_identity_verified.")
+data_unsup <- data_unsup[, !names(data_unsup) %in% vars_to_eliminate]
+```
+
+For the unsupervised clustering algorithms, we will need to compute the distance between all pairs of registers but, as we saw during class, this will require a very long computation time for large samples. Therefore, we have decided to take a sample (1000 observations) from the dataset with numerical and factor variables to avoid computation issues.
+
+```{r}
+# Selects only 1000 observations
+set.seed(1234)
+df <- sample(1:nrow(data_unsup), 1000)
+data_unsup <- data_unsup[df,]
+data_unsup2 <- data.frame(data_unsup)
+
+# Deletes the price
+vars_to_eliminate <- c("price")
+data_unsup <- data_unsup[, !names(data_unsup) %in% vars_to_eliminate]
+```
+
+By scaling the data, we ensure that the clustering algorithm performs effectively and consistently, without being biased by the scale or magnitude of individual features.
+
+```{r}
+data_unsup_sc <- scale(data_unsup)
+```
+
+We now use the Hopkins statistic to assess the clustering tendency of the dataset, where values closer to 1 indicate a higher likelihood of the dataset having a clustering structure.
+
+```{r}
+library(hopkins)
+(index_hop <- hopkins(X = data_unsup_sc, m = nrow(data_unsup_sc)-1))
+```
+
+We obtain a Hopkins statistic value of 1, which suggests a strong clustering tendency in our data. This means that the data points in the Airbnb listings dataset are more likely to be clustered or grouped together rather than being randomly distributed.
+
+## Hierarchical clustering
+
+Hierarchical clustering is a clustering algorithm that aims to group similar data points into hierarchical structures. It starts by considering each data point as an individual cluster and then iteratively merges the closest clusters until all data points are in a single cluster or a predefined stopping criterion is met. The result is a dendrogram, a tree-like structure that shows the relationships between the clusters at different levels of similarity.
+
+```{r}
+# Computes distance matrix
+d <- dist(data_unsup_sc, method = "euclidean")
+
+# Hierarchical clustering
+hc <- hclust(d, method = "ward.D2")
+
+# Plots hierarchical clustering with dendogram
+windows(14,7)
+plot(hc,cex=0.7)           
+
+# Assesses dendrogram quality
+cop.dist <- cophenetic(hc)
+(cor_hier <- cor(d, cop.dist))
+```
+
+A correlation value of `r cor_hier` indicates a moderate positive correlation between the original distance matrix and the cophenetic distance matrix. This suggests that the hierarchical clustering captured some degree of similarity between the data points, but there may also be some dissimilarities that were not fully captured by the clustering algorithm. Note that the correlation coefficient ranges from -1 to 1, where values close to 1 indicate a strong positive correlation.
+
+Next, we determine $\textit{k}$ (the number of clusters/cuts in our dendrogram)
+
+```{r}
+library(NbClust)
+
+# Number of clusters by elbow rule
+fviz_nbclust(data_unsup, hcut, method=c("wss"), linecolor = "#FF5A5F")  + 
+theme(axis.text.y = element_text(size = 9))
+```
+
+We choose to follow the elbow rule, which shows that, from $k=3$, the total within sum of square remains practically constant (i.e. 3 is the elbow point). The elbow rule, is a heuristic technique used to determine the optimal number of clusters. It involves plotting the within-cluster sum of squares (WCSS) against the number of clusters and selecting the number of clusters where the rate of improvement slows down significantly, forming the "elbow" shape in the plot above.
+
+Using $k=3$, we cut the dendrogram accordingly. In our case:
+
+```{r}
+# Does k cuts to the dendogram
+ct <- cutree(hc,3)
+fviz_dend(hc, k = 3, rect=TRUE, lwd=0.5, palette = "jco",rect_fill = TRUE, rect_border = "jco")
+```
+
+Another way to visualize how the data was divided into the $k$ clusters is to use the function $\texttt{fviz_cluster()}$ from the $\texttt{factoextra}$ package as follows:
+
+```{r}
+# Use fviz_cluster() to visualize the hierarchical clusters
+fviz_cluster(list(data = data_unsup_sc, cluster = ct))
+```
+
+The plot shows that, the two dimensions used in the graph explain 20.8% of the variability. Dimensions with higher percentages explain more of the original variance, suggesting that they carry more meaningful information for distinguishing and separating the data points in the clustering analysis. However, the clusters appear to be stacked or overlapping on top of each other, which suggests that the hierarchical clustering algorithm might not be effectively separating the data points into distinct groups.
+
+Next, we count how many observations were assigned to each cluster.
+
+```{r}
+# Counts observations per cluster
+data_unsup_cl <- mutate(data_unsup, cluster = ct)
+count(data_unsup_cl,cluster)
+```
+
+The majority of the observations were assigned to cluster number 1, whereas the second only had 4.7% of the observations.
+
+If the results from the hierarchical clustering algorithm would have been good, we could attempt to visualize whether if, by separating some variables in the original dataset by the cluster assigned to each observation, we could see any difference in the behavior of the variable depending on the group. For instance, we could plot a histogram of the price by cluster (1, 2 or 3) and try to see whether the prices of one of the clusters is higher (or lower) than for the others.
+
+```{r}
+# Prepares the data
+finaldata_unsup <- bind_cols(data_unsup_cl, data_unsup2$price)
+names(finaldata_unsup)[ncol(finaldata_unsup)] <- "price"
+finaldata_unsup$cluster <- as.factor(finaldata_unsup$cluster)
+
+# Plots the price per cluster
+ggplot(finaldata_unsup, aes(x = price)) +
+  geom_histogram(aes(color = cluster, fill = cluster), 
+                position = "identity", bins = 30, alpha = 0.4)+
+  ggtitle("Price per cluster (Hierarchical)")
+```
+
+In this case, we cannot tell by the graph if there are any differences on the behavior of the variable $\texttt{price}$ depending on the cluster.
+
+## K-Means
+
+K-means is a clustering algorithm that aims to divide a dataset into a predetermined number of clusters ($k$). It works by iteratively assigning each data point to the nearest cluster centroid and then updating the centroid based on the newly assigned data points. The algorithm seeks to minimize the within-cluster sum of squares (WCSS), optimizing the placement of the centroids to form compact and distinct clusters.
+
+Similar to what we did in Hierarchical Clustering, we begin by selecting the number of clusters we want to divide our dataset in by using the elbow rule. We can do it in two equivalent ways:
+
+```{r}
+# Number of clusters by elbow rule
+fviz_nbclust(data_unsup, kmeans, method=c("wss"))
+
+# Alternatively
+VE <- c()
+for (k in 1:10){
+  km <- kmeans(data_unsup, centers=k, nstart=10)
+  VE[k] <- km$betweenss/km$totss
+}
+par(mfrow=c(1,1))
+plot(VE,type="b",pch=19,xlab="Number of clusters",ylab="Explained variability")
+```
+
+We see from the plots above that the elbow point is $k=3$, so we select it as our desired number of clusters for the K-Means algorithm and put the cluster label (1 to 3) on the original sampled data.
+
+```{r}
+km2 <- kmeans(data_unsup_sc, centers=3, nstart=10)
+km2$centers
+
+# Puts the cluster label on the original sampled data
+data_unsup2$km2_cluster <- km2$cluster
+```
+By partitioning the data into three clusters, we get these many observations per group:
+
+```{r}
+(table(data_unsup2$km2_cluster))
+```
+
+The clustering is already done, but it would make no sense to stop all the analysis here. We are interested in drawing conclusions from the results of K-Means in order to give an answer to the main goal we set at the beginning of this unsupervised clustering section: to see whether there are any variables which make it possible to separate the data into distinct groups. To do that, due to the large amount of variables in our dataset, we will select the most relevant ones. These are the ones that affect more the decision of the algorithm when assigning each observation to a cluster. It is possible to select them by performing a Kruskal-Wallis test.
+
+We use the Kruskal-Wallis test to assess if there are statistically significant differences in the distributions of each variable across the clusters obtained from K-Means. By performing this test, it helps identify variables that show significant variation between the clusters, providing insights into the variables that contribute to the differentiation of the clusters.
+
+```{r}
+# Perform Kruskal-Wallis test for each variable
+kruskal_results <- apply(data_unsup_sc, 2, function(x) kruskal.test(x, km2$cluster))
+
+# Print the results
+print(kruskal_results)
+
+# Extract the p-values from the Kruskal-Wallis test results
+p_values <- sapply(kruskal_results, function(x) x$p.value)
+
+# Identify the variables with low p-values
+sig_vars <- names(which(p_values < 0.05))
+
+# Print the significant variables
+print(sig_vars)
+```
+
+As we did in Hierarchical clustering, we can visualize the results from K-Means with the function $\texttt{fviz_cluster()}$ from the $\texttt{factoextra}$ package:
+
+```{r}
+fviz_cluster(list(data = data_unsup_sc, cluster = km2$cluster),ellipse.type = "convex",
+             repel = TRUE,
+             show.clust.cent = FALSE, ggtheme = theme_minimal())+  
+  scale_colour_manual(values = c("#FF5A5F", "#2F4858", "#A65699")) +
+  scale_fill_manual(values = c("#FF5A5F", "#2F4858", "#A65699")) 
+```
+The plot above shows the percentage of variance explained by the first two dimensions, which is a 20.8%. As opposed to the graph obtained with hierarchical clustering, the clusters of K-Means are not completely overlapped. Nevertheless, the clusters are still not fully differentiable from each other, which suggest that K-Means might not be effectively separating the data points into distinct groups.
+
+Although a reduced 37 out of the original 49 variables were important for the K-Means algorithm when assigning a cluster to each observation, it is still too many to analyse one by one. For this final part, we are only going to select those we find more interesting and which could help us find a qualitative explanation to the clustering.
+
+```{r}
+ggplot(data_unsup2, aes(x = accommodates, fill = as.factor(km2_cluster))) +
+  geom_histogram(alpha=0.5, position='identity')+
+  ggtitle(paste0("Histogram per cluster of accommodates"))
+
+ggplot(data_unsup2, aes(x = bathrooms_text, fill = as.factor(km2_cluster))) +
+  geom_histogram(alpha=0.5, position='identity')+
+  ggtitle(paste0("Histogram per cluster of bathrooms_text"))
+
+ggplot(data_unsup2, aes(x = bedrooms, fill = as.factor(km2_cluster))) +
+  geom_histogram(alpha=0.5, position='identity')+
+  ggtitle(paste0("Histogram per cluster of bedrooms"))
+
+ggplot(data_unsup2, aes(x = beds, fill = as.factor(km2_cluster))) +
+  geom_histogram(alpha=0.5, position='identity')+
+  ggtitle(paste0("Histogram per cluster of beds"))
+
+ggplot(data_unsup2, aes(x = availability_365, fill = as.factor(km2_cluster))) +
+  geom_histogram(alpha=0.5, position='identity')+
+  ggtitle(paste0("Histogram per cluster of availability_365"))
+
+ggplot(data_unsup2, aes(x = reviews_per_month, fill = as.factor(km2_cluster))) +
+  geom_histogram(alpha=0.5, position='identity')+
+  ggtitle(paste0("Histogram per cluster of reviews_per_month"))
+```
+
+It is not clear if some variables in particular have affected the choice of cluster by the K-Means algorithm.
+
+In conclusion, based on the analysis of the Airbnb listings dataset using unsupervised clustering techniques, namely hierarchical clustering and k-means, the results obtained do not provide meaningful and interpretable clusters. The findings indicate that the clustering algorithms applied may not effectively capture the underlying patterns or structure present in the data. Further exploration and alternative approaches may be required to uncover meaningful patterns and gain valuable insights from the data.
+
+# Text analysis
+
+In this section, we apply text analysis techniques to explore the textual information present in the Airbnb listings dataset. It involves processing, understanding, and deriving valuable information from the descriptions, titles, or other textual information associated with the listings. This enables us to gain a deeper understanding of the properties, amenities, and other relevant aspects that can contribute to better decision-making and improved understanding of the dataset.
+
+The text preprocessing code below focuses on cleaning and preparing textual data from the Airbnb listings dataset for further analysis. It applies a series of transformations and cleaning operations to enhance the quality and structure of the text. 
+
+We begin by filtering out non-English comments using language detection techniques. This ensures that subsequent analysis is focused on English text only, which may be more relevant for the specific objectives of the analysis.
+
+```{r}
+#filtering out comments with languages other than English
+library(cld2)
+library(dplyr)
+
+en_data<-data%>%
+  mutate(description_lang = cld2::detect_language(description))%>%
+  filter(description_lang=="en")
+
+en_data <- en_data %>%
+  mutate(neighborhood_lang = cld2::detect_language(neighborhood_overview))%>%
+  filter(neighborhood_lang=="en")
+
+en_data <- en_data %>%
+  mutate(hostabout_lang = cld2::detect_language(host_about))%>%
+  filter(hostabout_lang=="en")
+```
+
+Next, the selected text columns undergo a series of cleaning steps. HTML tags are removed, punctuation marks are replaced with spaces, written accents are removed, and numbers or words containing numbers are eliminated. These operations help eliminate noise and standardize the text, making it more suitable for subsequent analysis.
+
+```{r}
+text_cols <- c("name", "description", "neighborhood_overview", "host_about")
+
+for (col in text_cols){
+  # removes HTML code
+  en_data[[col]]<-gsub("<[^>]+>", "",en_data[[col]])
+  # removes punctuation marks
+  en_data[[col]]<-gsub("[[:punct:][:blank:]]+", " ",en_data[[col]])
+  # removes written accents
+  en_data[[col]]<-iconv(en_data[[col]], to="ASCII//TRANSLIT")
+  # removes numbers and words with numbers (for instance "m2")
+  en_data[[col]]<-trimws(gsub("\\w*[0-9]+\\w*\\s*", "",en_data[[col]]))
+}
+```
+
+After the text cleaning, we proceed with word frequency analysis. We use the $\texttt{tidytext}$ package to tokenize the text into individual words, remove stop words (including additional Spanish stop words), and calculate the frequency of each word. Separate word frequency analyses are conducted for the name, description, neighborhood overview, and host about columns.
+
+```{r}
+# Creates a df with each word and its frequency for each text
+library(tidytext)
+data("stop_words")
+
+# To remove spanish stopwords
+# add stopwords borrowing them from other text mining packages as tm
+library(tm)
+stop_words <- bind_rows(stop_words, 
+                        data_frame(word = tm::stopwords("spanish"),
+                                               lexicon = "custom"))
+
+# Word frequency for the name of the listing
+name_freq <- en_data %>%
+  # Tokenize the sentences into words
+  unnest_tokens(word, name) %>%
+  # Remove stop words
+  anti_join(stop_words, by = join_by(word)) %>%
+  # Group by each word and count the frequency
+  count(word, sort = TRUE)
+
+# Word frequency for the description of the listing
+desc_freq <- en_data %>%
+  unnest_tokens(word, description) %>%
+  anti_join(stop_words, by = join_by(word)) %>%
+  count(word, sort = TRUE)
+
+# Word frequency for the neighborhood description
+neigh_freq <- en_data %>%
+  unnest_tokens(word, neighborhood_overview) %>%
+  anti_join(stop_words, by = join_by(word)) %>%
+  count(word, sort = TRUE)
+
+# Word frequency for the host description
+host_freq <- en_data %>%
+  unnest_tokens(word, host_about) %>%
+  anti_join(stop_words, by = join_by(word)) %>%
+  count(word, sort = TRUE)
+```
+
+By performing these text preprocessing tasks above, we prepare the textual data for further analysis, exploration, and visualization. It helps extract meaningful insights and patterns from the text, contributing to a deeper understanding of the Airbnb listings dataset.
+
+Once the data is ready for text analysis, we utilize the $\texttt{wordcloud2()}$ function from the $\texttt{wordcloud2}$ package to create word cloud visualizations for various aspects of the Airbnb listings dataset. Each line generates a word cloud for a specific data frame, representing word frequencies in different columns such as description, host about, listing names, and neighborhood overview. The word clouds visually depict the most frequent words in each respective column, enabling quick insights into prominent terms and patterns within the dataset.
+
+```{r}
+library(wordcloud2)
+
+wordcloud2(desc_freq[1:125,], color = "white", backgroundColor = "#FF385C", rotateRatio = 0)
+```
+
+
+```{r, echo=T, results=FALSE}
+wordcloud2(host_freq[1:125,], color = "white", backgroundColor = "#FF385C", rotateRatio = 0)
+```
+
+![](host_cloud.png)
+
+```{r, echo=TRUE, results=FALSE}
+wordcloud2(name_freq[1:125,], color = "white", backgroundColor = "#FF385C", rotateRatio = 0)
+```
+![](name_cloud.png)
+
+```{r, echo=TRUE, results=FALSE}
+wordcloud2(neigh_freq[1:125,], color = "white", backgroundColor = "#FF385C", rotateRatio = 0)
+```
+![](neigh_cloud.png)
+
+# Supervised clustering
+
+The goal of the supervised clustering part of this project will be to make predictions on the price of the listings. First, for the categorical defined price $\texttt{categorical_price}$ and then for the more realistic case, with the numerical one. As in most of the algorithms we will use train/test splits, we start by setting the index of our data that will refer to the training one, in order to have the same splits in all the algorithms.
+
+```{r}
+set.seed(28)
+p <- 0.75
+n <- dim(data)[1]
+train.sel <- sample(c(FALSE,TRUE), n, rep=TRUE, prob=c(1-p, p))
+```
+
+As the response variable is a categorical one with three levels, we will use accuracy as our reference metric to evaluate the performance of the clustering models. Note that taking a naive approach, assigning the Medium class, which is the most frequent one, we would get an accuracy of a $50\%$. So, coming from this base, we will try to improve this number.
+
+Also note that the division in three groups of the response variable was done artificially: we already saw at the unsupervised clustering part that there was not such a division by price in the listings. However, we decided to keep the categorical price as our response variable, as we find it interesting to predict in order to help hosts find the range of prices for their apartments.
+
+We need suitable data for the clustering algorithms. We will use the numerical variables and the factor ones. The factor variables will be converted to one-hot encoding (using dummy variables). We eliminate variables that will not contribute to the predictions and also factors that have too many levels to be converted to one-hot encoding.
+
+```{r}
+data_sup <- data %>%
+  select_if(~ !is.character(.))
+
+vars_to_eliminate <- c("X", "id", "host_id", "host_neighbourhood", "neighbourhood_cleansed", "property_type", "price", "categorical_price")
+data_sup <- data_sup[, !names(data_sup) %in% vars_to_eliminate]
+```
+
+```{r}
+library(caret)
+
+#define one-hot encoding function
+dummy <- dummyVars(" ~ .", data=data_sup)
+
+#perform one-hot encoding on data frame
+data_sup <- data.frame(predict(dummy, newdata=data_sup))
+
+data_sup$categorical_price <- data$categorical_price
+```
+
+```{r}
+vars_to_eliminate <- c("host_has_profile_pic.", "host_is_superhost.", "host_identity_verified.")
+data_sup <- data_sup[, !names(data_sup) %in% vars_to_eliminate]
+```
+
+```{r}
+train <- data_sup[train.sel, ]
+test <- data_sup[!train.sel, ]
+```
+
+
+## Naive bayes
+
+Naive Bayes is based on Bayes' theorem and the assumption that the features used to classify an object are conditionally independent given the class. Naive Bayes has been successfully applied to a variety of real-world problems, such as spam filtering, sentiment analysis, and document classification. One of the advantages of Naive Bayes is that it can work with a small amount of training data and handle large feature spaces efficiently.
+
+```{r}
+library(ineq)
+library(e1071)
+library(naivebayes)
+
+nb7 <- naive_bayes(categorical_price ~ ., train)
+preds_nb <- predict(nb7, newdata = test[,-c(ncol(test))], type="class")
+(metrics_nb <- confusionMatrix(preds_nb, test$categorical_price))
+```
+As we see, with a naive Bayes approach, we do not improve much the naive approach of assigning the most frequent group. However, we see that it tends to classify a lot of listings as $\texttt{Superior}$ price.
+
+## k-Nearest Neighbours
+
+The k-Nearest Neighbours (KNN) is a non-parametric algorithm used for both regression and classification problems. It is a simple yet powerful machine learning algorithm that is commonly used in industry and academia for its accuracy and interpretability. The KNN algorithm is based on the idea of similarity, where the output of the model is determined by the closest k neighbors to the input data point. This section will cover the process of fitting a KNN model to a given dataset, including selecting the optimal value of k, evaluating the model's performance, and interpreting the results.
+
+We will start by the most basic approach, using $k = 1$:
+
+```{r, include = FALSE}
+library(deldir)
+library(kknn)
+library(class)
+```
+
+```{r}
+##-- 1-NN Train + Test
+knn1 <- knn(train[ , -ncol(data_sup)], test=test[ ,  -ncol(data_sup)], cl=train$categorical_price, k = 1)
+(metrics_knn1 <- confusionMatrix(knn1, test$categorical_price))
+```
+
+As we see, we have already improved the naive approach. We will now use cross-validation in order to fit the model, still with $k = 1$:
+
+```{r}
+# Cross-validation
+knn2 <- knn.cv(data_sup[ ,-ncol(data_sup)], cl=data_sup$categorical_price, k = 1)
+(metrics_knn2 <- confusionMatrix(knn2, data_sup$categorical_price))
+```
+
+As a different approach, we will use kernel functions. In K-nearest neighbors algorithm, kernels can be used to weight the contributions of each neighbor to the final prediction, giving more importance to closer neighbors or those with higher similarity scores.
+
+```{r}
+# Kernels
+kknn1 <- kknn(factor(categorical_price)~., train, test, k=1)
+fit <- fitted(kknn1)
+(metrics_kknn1 <- confusionMatrix(fit,test$categorical_price))
+```
+As we can see, adding a kernel has improved the overall accuracy. Also, we have achieved a quite balanced model: the worst among sensitivities and specificities is over $68\%$ and the balanced accuracy is quite high in all of the groups.
+
+As a last improvement, we will try to select the best value for $k$, the number of neighbors to take into account. We will do so by looping for different values of $k$, skipping multiples of 3 to avoid draws between the predictions and using kernels.
+
+```{r}
+# Selection of k
+p <- c()
+K <- seq(1,41,3)
+
+for(k in K){
+  kknn <- kknn(factor(categorical_price)~., train, test,k=k)
+  t <- table(fitted(kknn),test$categorical_price)
+  p <- c(p,sum(diag(t))/sum(t))
+}
+
+plot(K,p,pch=19,type='b')
+cbind(K,p)
+```
+
+Finally, we fit the best model that we have found, which is using kernels and using $k = 19$.
+
+```{r}
+kknn_final <- kknn(factor(categorical_price)~., train, test, k=9)
+fit <- fitted(kknn_final)
+(metrics_kknn_final <- confusionMatrix(fit,test$categorical_price))
+```
+
+## Support vector machines
+
+Support Vector Machines (SVM) is a powerful and popular machine learning algorithm used for both classification and regression tasks. SVM is known for its ability to handle complex data with high dimensionality and non-linearity, making it widely applicable in various fields, including image recognition, bioinformatics, and text classification. In essence, SVM finds the best hyperplane that separates data into different classes while maximizing the margin, which is the distance between the hyperplane and the closest data points.
+
+```{r, include=FALSE}
+library(e1071)
+```
+
+```{r}
+mod.svm <- svm(as.factor(categorical_price)~.,d = train,cost=1)
+
+pr <- predict(mod.svm,test)
+(metrics_svm <- confusionMatrix(pr,as.factor(test$categorical_price)))
+```
+As we can see, with SVM we achieve the best performance so far.
+
+## Decision trees
+
+Decision trees are a popular machine learning algorithm that can be used for classification and regression tasks. They work by recursively partitioning the feature space into regions based on the values of the input features, and assigning a label or value to each region. Decision trees are easy to interpret and can handle both numerical and categorical data. They can also handle missing values and outliers, and can be used for feature selection. Decision trees can suffer from overfitting if they are too complex or if they are trained on noisy or biased data.
+
+```{r, include = FALSE}
+library(randomForest)
+library(party)
+```
+
+```{r}
+ct.mod <- ctree(categorical_price ~ ., train,control=ctree_control(maxdepth=0))
+
+pred <- predict(ct.mod, test,type="response")                        
+(metrics_dt <- confusionMatrix(pred, test$categorical_price))
+```
+
+Here, we obtain a worse performance than in the previous methods. However, following, we will use a combination of decision trees (a Random Forest) to see if we can improve.
+
+## Random Forest
+
+Random forest is an ensemble learning algorithm that combines multiple decision trees to improve classification or regression performance. It works by constructing a set of decision trees on randomly sampled subsets of the training data, and then combining their predictions through voting or averaging. Random forest is a powerful and versatile algorithm that can handle both numerical and categorical data, and can automatically handle missing values and feature selection. It is also robust to overfitting and can handle high-dimensional feature spaces. However, it can be computationally expensive to train and can be sensitive to noisy or imbalanced data. Despite these limitations, random forest is widely used in various domains, such as bioinformatics, finance, and marketing.
+
+In principle, it seems that, for the characteristics of our data (large feature space), the Random Forest algorithm should work fine.
+
+```{r}
+set.seed(28)
+rf.mod <- randomForest(categorical_price~.,train,importance=TRUE,ntree=100,do.trace=FALSE)
+pred.rf <- predict(rf.mod,test)
+(metrics_rf <- confusionMatrix(pred.rf,test$categorical_price))
+```
+
+We achieve the best performance so far. We will comment more in detail the previous results:
+
+- In most of the cases, we obtain the worst values in sensitivity for the $\texttt{Superior}$ class. That is, we tend to classify listings which belong to the $\texttt{Superior}$ in the other ones (mostly in the $\texttt{Medium}$ one).
+- The $\texttt{Medium}$ class tends to be the one with the worst specificity. This was expected: apart from being the major class, in a ordinal response variable, the variable of the middle tends to be overclassified.
+- The best accuracy so far has been achieved with Random Forest and we achieved almost an $80\%$, which we consider to be a great result.
+
+With the algorithms we have seen in class, we have obtained the following accuracies so far:
+
+| Algorithm | Accuracy |
+|----------|----------|
+| Naive Bayes | `r metrics_nb$overall[[1]]` |
+| k-Nearest Neighbors | `r metrics_kknn_final$overall[[1]]` |
+| Support Vector Machines | `r metrics_svm$overall[[1]]` |
+| Decision Trees | `r metrics_dt$overall[[1]]` |
+| Random Forest | `r metrics_rf$overall[[1]]` |
+
+We are widely improving the naive approach of assigning to the majority class (which would give a $50\%$ accuracy). It is important to remark that the division in groups was done artificially in a continous variable (the price), so the level of accuracy is quite satisfactory.
+
+## Other approaches
+
+After using the algorithms that we have seen during the lectures of the course, now we will see some different approaches, including modifications of the one that have worked the best so far: the Random Forest.
+
+### Neural networks
+
+We will first start by fitting a Neural Network to the data. A neural network is a type of machine learning algorithm that is designed to learn patterns in data through a series of interconnected layers of neurons. These layers consist of nodes or neurons that receive input, perform some computation, and produce an output that is passed on to the next layer.
+
+We will first prepare the data. We will use the numerical and factor variables, all of them normalized with a pre-defined function.
+
+```{r, include=FALSE}
+library(keras)
+set.seed(28)
+```
+
+```{r}
+normalize <- function(x) {
+  return((x - min(x)) / (max(x) - min(x)))
+}
+```
+
+```{r}
+data_nn <- data_sup
+
+for (i in 1:ncol(data_nn)) data_nn[,i] <- as.numeric(data_nn[,i])
+data_nn <- as.data.frame(lapply(data_nn[, colnames(data_nn)], normalize))
+data_nn$categorical_price <- as.factor(data_nn$categorical_price*2)
+```
+
+```{r}
+train_nn <- data_nn[train.sel, ]
+test_nn <- data_nn[!train.sel, ]
+```
+
+We will fit a Neural Network with one input, two hidden and one output layer, reducing the number of units in each one of them. The input and hidden layers will use as activation function a $\texttt{ReLu}$ function:
+
+$f(x) = max(0,x)$
+
+The output layer, as we want to predict a categorical variable with three values, will have as function a $\texttt{Softmax}$ with 3 units. The softmax function is defined as:
+
+$f(z)_j = \frac{e^{z_j}}{\sum_{k=1}^K e^{z_j}} \quad j = 1,...,K$
+
+where $K$ is the number of levels.
+
+```{r, warning=FALSE}
+set.seed(28)
+
+# Define the model architecture
+model <- keras_model_sequential()
+model %>%
+  layer_dense(units = 64, activation = "relu", input_shape = ncol(train_nn) - 1) %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dropout(rate = 0.2) %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dense(units = 3, activation = "softmax")
+
+# Compile the model
+model %>% compile(
+  loss = "categorical_crossentropy",
+  optimizer = "adam",
+  metrics = c("accuracy")
+)
+
+# Prepare the data for training
+x_train <- as.matrix(train_nn[, -which(names(train_nn) == "categorical_price")])
+y_train <- to_categorical(as.numeric(train_nn$categorical_price) - 1, num_classes=3)
+
+# Train the model
+history <- model %>% fit(
+  x_train, y_train,
+  epochs = 25,
+  batch_size = 32,
+  validation_split = 0.2,
+  verbose = FALSE
+)
+
+plot(history)
+
+# Evaluate the model on the test data
+x_test <- as.matrix(test_nn[, -which(names(test_nn) == "categorical_price")])
+y_test <- to_categorical(as.numeric(test_nn$categorical_price) - 1, num_classes = 3)
+```
+
+```{r}
+predict_nn <- as.factor(max.col(predict(model, x_test)))
+y_test <- as.factor(max.col(y_test))
+(metrics_nn <- confusionMatrix(predict_nn, y_test))
+```
+
+As we can see, we do not arrive to the same level of accuracy we had before with the Random Forest. This may be due to the fact that we have too many parameters and so, the number of observations may be relatively low for fitting a Neural Network.
+
+### Combining two models
+
+As we have seen, the best model (the Random Forest) worked its worst on classifying the $\texttt{High}$ price category. In the other hand, the Naive Bayes model, despite having a bad performance overall, tent to classify a lot of listings in that category. That Take us to trying to combine both models (giving a higher weight to Random Forest, as it is the one that works better). Let's see what we obtain:
+
+```{r}
+rf_prob <- predict(rf.mod, test, type = "prob")
+nb_prob <- predict(nb7, test, type = "prob")
+
+# Combine predictions using weighted averaging
+rf_weight <- 0.98  # weight for Random Forest model
+nb_weight <- 1 - rf_weight   # weight for Naive Bayes model
+
+# Combine predictions using weighted averaging
+weighted_prob <- rf_prob * rf_weight + nb_prob * nb_weight
+combined_pred <- apply(weighted_prob, 1, which.max)
+
+(t_comb <- table(as.factor(combined_pred), test$categorical_price))
+acc_comb <- sum(diag(t_comb))/sum(t_comb)
+acc_comb
+```
+Giving a weight of $98\%$ to the Random Forest and a $2\%$ to the Naive Bayes, we are able to improve the performance.
+
+### Using the amenities
+
+Now, we will use a different approach from the ones we have seen so far. We will try to see if we can predict the price group of the listings by using which amenities they have. For that purpose, we will be using the column $\texttt{amenities}$ of the data. This column gives a list of all the amenities that the apartment has. The procedure will be the following:
+
+1. Extract all the column as a big list of amenities.
+2. Find the 50 most popular ones.
+3. Produce a one-hot encoding (50 columns) with binary variables saying if the amenity is present on that listing or not.
+
+```{r}
+# Extract elements from strings column
+elements <- gsub("[^[:alpha:], ]", "", data$amenities)
+elements <- lapply(strsplit(elements, ",\\s*"), function(x) trimws(x, "both"))
+
+# Flatten list of elements and remove empty strings
+my_list <- unlist(elements)
+my_list <- my_list[my_list != ""]
+
+# Get 50 most common elements
+counts <- table(my_list)
+most_common <- names(sort(counts[counts > 50], decreasing = TRUE)[1:50])
+
+data_am <- data_sup
+
+# Create factor columns for each most common element
+for (elem in most_common) {
+  # ignore capital letters and spaces
+  pattern <- paste0("[^[:alpha:]]", gsub(" ", "", toupper(elem)), "[^[:alpha:]]")
+  data_am[[gsub(" ", "", elem)]] <- as.factor(sapply(elements, function(x) elem %in% x))
+}
+```
+
+```{r}
+data_rf <- data_am[, c(51:101)]
+```
+
+```{r}
+train <- data_rf[train.sel, ]
+test <- data_rf[!train.sel, ]
+```
+
+```{r}
+set.seed(28)
+rf.mod_all <- randomForest(categorical_price~.,train,importance=TRUE,ntree=100,do.trace=FALSE)
+pred.rf_all <- predict(rf.mod_all,test)
+(metrics_am <- confusionMatrix(pred.rf_all, test$categorical_price))
+```
+
+Despite not arriving to the same levels as before, we see that only using amenities we improve the naive $50\%$ by a lot. The $\texttt{High}$ price category is the one that is worst predicted. However, there are just a few serious mistakes (predicting $\texttt{Low}$ when it is $\texttt{High}$ or viceversa).
+
+To end up with this part we will combine the predictions with numerical variables with the ones with amenities, to see if we can improve:
+
+```{r}
+train <- data_am[train.sel, ]
+test <- data_am [!train.sel, ]
+```
+
+```{r}
+set.seed(28)
+rf.mod <- randomForest(categorical_price~.,train,importance=TRUE,ntree=100,do.trace=FALSE)
+pred.rf <- predict(rf.mod,test)
+(metrics_all <- confusionMatrix(pred.rf,test$categorical_price))
+```
+
+We slightly increase the accuracy of the Random Forest, but just by a few tenths in percentage, so it may not be worse to go from 36 predictors to 86.
+
+So, for this set of different predictive models, the summary of the accuracy of each one of them is:
+
+| Algorithm | Accuracy |
+|----------|----------|
+| Neural Network | `r metrics_nn$overall[[1]]` |
+| Random Forest + Naive Bayes | `r acc_comb` |
+| Random Forest with Amenities | `r metrics_am$overall[[1]]` |
+| Random Forest with all predictors | `r metrics_all$overall[[1]]` |
+
+In this section, we tried some variations of the clustering methods that were seen in class and also introduced some new ones. Overall, we achieved similar accuracies as before, but we were able to improve the best one slightly: by combining two methods, we reduced the misclassification of the $\texttt{Superior}$ class and so, we improved the overall accuracy.
+
+# Real case: predicting the price
+
+In the previous section, we tried to predict an artificially created price group for the listings. However, in reality, when hosts list their properties, they are interested in knowing which price should they give to it in order to be competitive in the market. For this reason, we decided to fit a model to predict the numerical price of a listing giving their features. For that purpose, we will be using Random Forest, as it is the model that has had the better approach when predicting the categorical price:
+
+```{r}
+data_rf <- data %>%
+  select_if(~ !is.character(.))
+
+vars_to_eliminate <- c("X", "id", "host_id", "categorical_price")
+data_rf <- data_rf[, !names(data_rf) %in% vars_to_eliminate]
+
+for (i in 1:ncol(data_rf)) data_rf[,i] <- as.numeric(data_rf[,i])
+```
+
+```{r}
+train <- data_rf[train.sel, ]
+test <- data_rf[!train.sel, ]
+```
+
+```{r}
+set.seed(28)
+rf.mod_num <- randomForest(price~., train, importance=TRUE,ntree=100,do.trace=FALSE)
+pred.rf_num <- predict(rf.mod_num, test)
+```
+
+```{r}
+library(Metrics)
+rmse <- rmse(pred.rf_num, test$price)
+rrse <- rrse(pred.rf_num, test$price)
+```
+
+We see some of the usual performance metrics. However, without more context, it is difficult to say if these are good numbers or not. For the case of the $\texttt{RMSE}$, we see a value of `r rmse` which, comparing to the mean of the variable to predict, which is `r mean(test$price)` is relatively large. However, we should take into account that the price has a high variability and high values (despite having eliminated the outliers), so the value of the $\texttt{RMSE}$ is not that bad.
+
+We can also perform a paired t-test, to see how the predictions and the real values compare:
+
+```{r}
+t <- t.test(pred.rf_num, test$price, paired=TRUE)
+t
+```
+Despite the $\texttt{RMSE}$ being relatively high and the means of predictions and real values being significantly difference, we see that the mean difference is not that far from zero, so we consider the model to be fairly good.
+
+In order to see an application of this, we have designed a small interface in which the potential host can select some of the features of their apartment (we have simplified the model in order to avoid the host having to specify more than 30 features) and he/she gets returned a price for their apartment, comparing with the current state of the market. The interface can be seen in a separated $\texttt{.Rmd}$ document.
+
+```{r}
+library(caret)
+# Get variable importance
+importance <- varImp(rf.mod_num)
+
+print(importance)
+```
+

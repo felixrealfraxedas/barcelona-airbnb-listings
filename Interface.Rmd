@@ -1,0 +1,125 @@
+---
+title: "Interface"
+author: "Berta Pla i Casamitjana and Fèlix Real Fraxedas"
+date: "2023-04-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(shiny)
+library(shinythemes)
+library(leaflet)
+```
+```{r}
+# Use the pre-existing model to predict the price
+vars_to_select <- c("bathrooms_text", "accommodates", "room_type.Entire.home.apt", "room_type.Hotel.room", "room_type.Private.room", "room_type.Shared.room", "minimum_nights", "latitude", "longitude")
+data_inter <- data_sup[ , vars_to_select]
+
+data_inter$price <- data$price
+  
+for (i in 1:ncol(data_inter)) data_inter[,i] <- as.numeric(data_inter[,i])
+
+set.seed(28)
+rf.mod_inter <- randomForest(price~., data_inter, importance=TRUE,ntree=100,do.trace=FALSE)
+```
+
+```{r}
+input_data <- data.frame(bathrooms_text = 2,
+                           accommodates = 2,
+                           minimum_nights = 15,
+                           latitude = 42,
+                           longitude = 1,
+                           room_type.Private.room = 1,
+                           room_type.Shared.room = 0,
+                           room_type.Hotel.room = 0,
+                           room_type.Entire.home.apt = 0)
+predict(rf.mod_inter, newdata = input_data)
+```
+
+
+```{r}
+predict_price <- function(bathrooms, accommodates, room_type, minimum_nights, latitude, longitude) {
+  # Create a data frame with the input parameters
+  input_data <- data.frame(bathrooms_text = as.numeric(bathrooms),
+                           accommodates = as.numeric(accommodates),
+                           minimum_nights = as.numeric(minimum_nights),
+                           latitude = as.numeric(latitude),
+                           longitude = as.numeric(longitude),
+                           room_type.Private.room = ifelse(room_type == "Private room", 1, 0),
+                           room_type.Shared.room = ifelse(room_type == "Shared room", 1, 0),
+                           room_type.Hotel.room = ifelse(room_type == "Hotel room", 1, 0),
+                           room_type.Entire.home.apt = ifelse(room_type == "Entire home/apt", 1, 0))
+  
+  # Make the prediction using the random forest model
+  prediction <- predict(rf.mod_inter, newdata = input_data)
+  
+  return(prediction)
+}
+
+```
+
+
+```{r}
+ui <- fluidPage(
+  leafletOutput("map"),
+  theme = shinytheme("flatly"),
+  titlePanel("Airbnb price recommender"),
+  sidebarLayout(
+    sidebarPanel(
+      numericInput("bathrooms", "Number of bathrooms:", value = 1),
+      numericInput("accomodates", "Number of accomodates:", value = 2),
+      selectInput("room_type", "Room type:",
+                  choices = c("Entire home/apt", "Private room", "Shared room", "Hotel room"),
+                  selected = "Entire home/apt"),
+      sliderInput("minimum_nights", "Minimum nights:",
+                  min = 1, max = 30, value = 5),
+      actionButton("predict_button", "Predict")
+    ),
+    mainPanel(
+      verbatimTextOutput("prediction_output")
+    )
+  )
+)
+```
+
+```{r}
+server <- function(input, output) {
+  
+  output$map <- renderLeaflet({
+    leaflet() %>% addTiles() %>% setView(lng = 2.1734, lat = 41.3851, zoom = 12)
+  })
+  
+  output$coords <- renderPrint({
+    input$map_click
+  })
+  
+  observeEvent(input$map_click, {
+    click <- input$map_click
+    leafletProxy("map") %>%
+      clearMarkers() %>%
+      addMarkers(lng = click$lng, lat = click$lat)
+  })
+  
+  # Define the action to take when the predict button is clicked
+  observeEvent(input$predict_button, {
+    # Call the prediction function with the input parameters
+    prediction <- round(predict_price(input$bathrooms, input$accomodates, input$room_type, input$minimum_nights, input$map_click$lat, input$map_click$lng))
+    # Update the output with the prediction
+    output$prediction_output <- renderText(paste("The predicted price is", prediction, "€"))
+  })
+}
+
+
+```
+
+```{r}
+shinyApp(ui, server)
+```
+
+
+
+

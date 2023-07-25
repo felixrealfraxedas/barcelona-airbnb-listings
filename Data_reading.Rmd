@@ -1,0 +1,175 @@
+---
+title: "Read data"
+author: "Berta Pla, Fèlix Real"
+date: "2023-03-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+data <- read.csv("listings.csv")
+```
+
+```{r}
+vars_to_factor <- c("neighbourhood_cleansed", "neighbourhood_group_cleansed", "property_type", "room_type", "has_availability", "calendar_last_scraped", "host_neighbourhood", "host_is_superhost", "host_has_profile_pic", "host_identity_verified", "instant_bookable")
+```
+
+```{r}
+vars_to_eliminate <- c("scrape_id", "last_scraped", "source", "picture_url", "listing_url", "host_url", "host_thumbnail_url", "host_picture_url", "host_verifications", "neighbourhood", "bathrooms", "minimum_minimum_nights", "maximum_minimum_nights", "minimum_maximum_nights", "maximum_maximum_nights", "minimum_nights_avg_ntm", "maximum_nights_avg_ntm", "calendar_updated", "calendar_last_scraped", "number_of_reviews_ltm", "first_review", "last_review", "license", "calculated_host_listings_count", "calculated_host_listings_count_entire_homes", "calculated_host_listings_count_private_rooms", "calculated_host_listings_count_shared_rooms")
+```
+
+```{r}
+data[, vars_to_factor] <- lapply(data[, vars_to_factor], factor)
+data <- data[, !names(data) %in% vars_to_eliminate]
+```
+
+```{r}
+sum(is.na(data))
+colSums(is.na(data))
+sum(complete.cases(data))
+```
+
+
+```{r}
+library(stringr)
+data$bathrooms_text <- as.numeric(word(data$bathrooms_text, 1))
+data$price <- as.numeric(gsub('[$,]', '', data$price))
+data$host_response_rate <- as.numeric(gsub('[%,]', '', data$host_response_rate))
+data$host_acceptance_rate <- as.numeric(gsub('[%,]', '', data$host_acceptance_rate))
+```
+
+```{r}
+sum(is.na(data))
+colSums(is.na(data))
+sum(complete.cases(data))
+```
+
+```{r}
+data <- data[complete.cases(data), ]
+```
+
+```{r}
+table(sapply(data, class))
+```
+
+```{r}
+data <- data[!(data$availability_365 == 0), ]
+```
+
+```{r}
+# Sets a maximum price for the listings
+max_price <- quantile(data$price, 0.995)
+
+# Removes data above maximum threshold
+data <- data[data$price < max_price,]
+
+# Plots distribution of price
+hist(data$price)
+```
+Similar for the other variables.
+
+In the summary, listing with most minimum nights has minimum_nights = 1125
+
+```{r}
+summary(data$minimum_nights)
+
+hist(data$minimum_nights)
+# Sets a maximum minimum_nights for the listings
+max_minnights <- quantile(data$minimum_nights, 0.99)
+
+# Removes data above maximum threshold
+data <- data[data$minimum_nights < max_minnights,]
+
+# Plots distribution of minimum_nights
+hist(data$minimum_nights)
+```
+```{r}
+summary(data$host_total_listings_count)
+
+hist(data$host_total_listings_count)
+# Sets a maximum host_total_listings_count for the listings
+max_listings <- quantile(data$host_total_listings_count, 0.99)
+
+# Removes data above maximum threshold
+data <- data[data$host_total_listings_count < max_listings,]
+
+# Plots distribution of host_total_listings_count
+hist(data$host_total_listings_count)
+```
+```{r}
+##############################################
+####AIXO EM SEMBLA QUE TREU MASSES OBSERVACIONS!!!
+###############################################
+
+summary(data$maximum_nights)
+hist(data$maximum_nights)
+
+# Sets a maximum maximum_nights for the listings
+max_maxnights <- quantile(data$maximum_nights, 0.99)
+
+# Removes data below minimum threshold
+data <- data[data$maximum_nights <= max_maxnights,]
+
+# Plots distribution of maximum_nights
+hist(data$maximum_nights)
+```
+
+```{r}
+hist(data$host_response_rate)
+
+# Sets a maximum price for the listings
+min_response <- quantile(data$host_response_rate, 0.005)
+
+# Removes data above maximum threshold
+data <- data[data$host_response_rate > min_response,]
+
+# Plots distribution of price
+hist(data$host_response_rate)
+```
+```{r}
+hist(data$host_acceptance_rate)
+
+# Sets a minimum host_acceptance_rate for the listings
+min_acceptance <- quantile(data$host_acceptance_rate, 0.001)
+
+# Removes data below minimum threshold
+data <- data[data$host_acceptance_rate > min_acceptance,]
+
+# Plots distribution of price
+hist(data$host_acceptance_rate)
+```
+
+```{r}
+library(dplyr)
+# Selects numerical and factor data
+data_hier <- data %>%
+  select_if(~ !is.character(.))
+
+# Deletes IDs and price
+vars_to_eliminate <- c("X", "id", "host_id", "price")
+data_hier <- data_hier[, !names(data_hier) %in% vars_to_eliminate]
+
+# Converts all variables into numerical
+for (i in 1:ncol(data_hier)) data_hier[,i] <- as.numeric(data_hier[,i])
+```
+
+```{r}
+library(Hmisc)
+par(mfrow = c(3,3))
+hist.data.frame(data_hier)
+```
+
+
+```{r}
+breaks <- c(min(data$price) - 1, quantile(data$price, 0.25), quantile(data$price, 0.75), max(data$price) + 1)
+data$categorical_price <- cut(data$price, breaks, labels = c("Low", "Medium", "High"))
+```
+
+```{r}
+write.csv(data, "bcn_data_cleansed.csv")
+```
+
+
