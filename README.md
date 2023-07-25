@@ -46,6 +46,9 @@ Also, a summary of the results can be found in the presentation **Plantilla Airb
 1. Clone this repository
 
 ```
-
+https://github.com/felixrealfraxedas/barcelonaairbnblistings.git
+cd barcelonaairbnblistings
 ```
+
+2. Install the required software
 
